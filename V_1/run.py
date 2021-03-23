@@ -8,18 +8,18 @@ import V_1.ttv as ttv
 
 
 params_default = {
-        # 1. Mode selection
-        "mini_batch": False,  # mini batch
+    # 1. Mode selection
+    "mini_batch": True,  # mini batch
 
-        'boundary_stack_mode': False,
+    'boundary_stack_mode': False,
 
-        'trained_model_test': False,  # test mode
-        'trained_parameter_pth': "210219_1500_epoch",
-        'trained_parameter_name': "latest_parameter",
+    'trained_model_test': False,  # test mode
+    'trained_parameter_pth': "210219_1500_epoch",
+    'trained_parameter_name': "latest_parameter",
 
-        # 2. Data load
-        'ref_pt': False,
-        'no_boundary_for_input': True,
+    # 2. Data load
+    'ref_pt': False,
+    'no_boundary_for_input': True,
         'no_boundary_for_design': True,  # ref의 boundary여부도 이를 따름.
 
         # 3. Design matrix
