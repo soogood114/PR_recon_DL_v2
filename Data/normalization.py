@@ -51,6 +51,20 @@ def normalize_g_buffer_v1(g_buffer):
     return g_buffer
 
 
+def normalize_g_buffer_img_v1(g_buffer):
+    """
+    이미지 버전
+    """
+    # depth
+    g_buffer[:, :, :, 3] = normalize_depth_1ch_v1(g_buffer[:, :, :, 3])
+
+    # normal
+    g_buffer[:, :, :, 4:] += 1
+    g_buffer[:, :, :, 4:] /= 2
+
+    return g_buffer
+
+
 def normalize_input_stack_v1(input):
     """
         input : N, H_d, W_d, T, 10 : 7은 albedo depth normal 순서
@@ -97,6 +111,30 @@ def normalize_input_img_v1(input):
     input[:, :, :, 7:] /= 2
 
 
+def normalize_input_img_cmp(input, ref):
+    """
+        input : N, H, W, 19 (tiled, noisy, g-buffer, dx, dy)
+        ref : N, H, W, 3 (ref)
+        output : throughput log ,albedo = 이미 [0, 1], depth = 1ch [0, 1], normal = [0, 1]
+        특징 : 입력을 stack의 형태가 아니라 image의 형태로 받게 된다.
+    """
+
+    # color log transform (tile and noisy)
+    input[:, :, :, :3] = normalization_signed_log(input[:, :, :, :3])
+
+    # g-buffer
+    input[:, :, :, 3:10] = normalize_g_buffer_img_v1(input[:, :, :, 3:10])
+
+    # dx and dy
+    if input.shape[3] > 10:
+        input[:, :, :, 10:] = normalization_signed_log(input[:, :, :, 10:])
+
+    ref[:, :, :, :3] = normalization_signed_log(ref[:, :, :, :3])
+
+
 def normalize_GT_v1(GT):
     GT[:, :, :, :, :3] = normalization_signed_log(GT[:, :, :, :, :3])
 
+
+def normalize_GT_img_v1(GT):
+    GT[:, :, :, :3] = normalization_signed_log(GT[:, :, :, :3])

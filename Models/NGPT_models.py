@@ -1,7 +1,7 @@
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
-
+import Feed_and_Loss.loss as my_loss
 
 class NGPT_PU(nn.Module):
     def __init__(self, in_dim, out_dim):
@@ -29,14 +29,13 @@ class Back_bone_NGPT_v1(nn.Module):
     """ 인풋 : 각각 들어간다.  아웃풋 : 타일"""
     """ SIGA19에서 나온 supervised 논문에서의 네트워크를 구현"""
 
-    def __init__(self, channels_in=5, out_dim=3):
+    def __init__(self, params, channels_in=5, out_dim=3):
         super(Back_bone_NGPT_v1, self).__init__()
 
         self.channels_in = channels_in  # RGB + Features
 
         # self.Kernel_size = kernel_size
         # self.k_size = pred_kernel
-
 
         """First encoding block"""
         self.en1_PU1 = NGPT_PU(channels_in, 40)
@@ -101,7 +100,6 @@ class Back_bone_NGPT_v1(nn.Module):
         self.de2_up_conv = nn.ConvTranspose2d(160 + self.en2_num_ch + 80 * 3, 80, 2, stride=2, padding=0)
         self.de2_up_conv_relu = nn.LeakyReLU()
 
-
         """Third decoding block"""
         self.de3_PU1 = NGPT_PU(80 + self.en1_num_ch, 40)
         self.de3_PU2 = NGPT_PU(80 + self.en1_num_ch + 40, 40)
@@ -111,6 +109,8 @@ class Back_bone_NGPT_v1(nn.Module):
         # down -> out_ch
         self.de3_up_conv = nn.Conv2d(80 + self.en1_num_ch + 40 * 4, out_dim, 3, padding=1)
         self.de3_up_conv_relu = nn.ReLU()
+
+        "NEW ONE"
 
 
     def loss(self, img_out, ref):
@@ -127,7 +127,6 @@ class Back_bone_NGPT_v1(nn.Module):
         "이건 PR net 비교를 위해 새로 추가 됨"
 
         ref_col = ref[:, :3, :, :]
-        ref_gradients = ref[:, 3:, :, :]
 
         data_loss = self.loss(out, ref_col)
 

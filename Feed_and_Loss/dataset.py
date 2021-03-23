@@ -7,6 +7,37 @@ from torch.utils.data import Dataset, DataLoader
 """*******************************************************************************"""
 
 
+class Supervised_dataset(Dataset):
+    """supervised dataset v1"""
+    """ 먼저 이 class는 이미 numpy로 만들어진 객체를 input으로 받는다."""
+    """ 만든 가장 큰 이유는 transform을 하기 위해서다."""
+
+    def __init__(self, input, target, train=True, transform=None):
+        """
+        Args:
+            input, target : N, H, W, C
+            input : color + features
+            GT : ref color
+        """
+        self.input_for_network = input
+        self.GT_for_network = target
+        self.transform = transform
+        self.is_train = train
+
+    def __len__(self):
+        return self.input_for_network.shape[0]
+
+    def __getitem__(self, idx):
+        input = self.input_for_network[idx]  # color + features + diff
+        GT = self.GT_for_network[idx]
+
+        sample = {'input': input, 'target': GT}
+
+        if self.transform:
+            sample = self.transform(sample)
+
+        return sample
+
 
 class Supervised_dataset_with_design_v1(Dataset):
     """

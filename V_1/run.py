@@ -9,7 +9,7 @@ import V_1.ttv as ttv
 
 params_default = {
     # 1. Mode selection
-    "mini_batch": False,  # mini batch
+    "mini_batch": True,  # mini batch
 
     'boundary_stack_mode': False,
 
@@ -30,14 +30,14 @@ params_default = {
     'epochs': 2000,
     'tile_length': 4,
     'patch_size': 200,  # 200
-        'multi_crop': False,
+    'multi_crop': False,
 
-        # 5. Normalization
-        'mue_tr': False,
+    # 5. Normalization
+    'mue_tr': False,
 
-        # 6. Loss configuration
-        'loss_type': 'l1',  # l1, l2, smape
-        'stitching_weights': 0,  # color loss + stitching loss
+    # 6. Loss configuration
+    'loss_type': 'l1',  # l1, l2, smape
+    'stitching_weights': 0,  # color loss + stitching loss
 
 
         # 7. Optimization

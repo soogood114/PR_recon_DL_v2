@@ -12,6 +12,38 @@ import Data.exr as exr
 """*******************************************************************************"""
 
 
+class RandomCrop(object):
+    """
+    Args:
+        가장 기본적인 RandomCrop 함수.
+    """
+
+    def __init__(self, output_size):
+        assert isinstance(output_size, (int, tuple))
+        if isinstance(output_size, int):
+            self.output_size = (output_size, output_size)
+        else:
+            assert len(output_size) == 2
+            self.output_size = output_size
+
+    def __call__(self, sample):
+        input, target = sample['input'], sample['target']
+
+        h, w = input.shape[:2]
+        new_h, new_w = self.output_size
+
+        top = np.random.randint(0, h - new_h)
+        left = np.random.randint(0, w - new_w)
+
+        input = input[top: top + new_h,
+                left: left + new_w]
+
+        target = target[top: top + new_h,
+                 left: left + new_w]
+
+        return {'input': input, 'target': target}
+
+
 class RandomCrop_stack_with_design(object):
     """
     input : output_size, tile_size, stack_img_sample(input, design, GT)
@@ -133,6 +165,30 @@ class RandomFlip_with_design(object):
             target = np.flip(target, axis=axis_index + 1)
 
         return {'input': input.copy(), 'design': design.copy(), 'target': target.copy()}
+
+
+class ToTensor(object):
+    """numpy array를 tensor(torch)로 변환 시켜줍니다."""
+    """ transform.ToTensor와는 다르게 dic의 형태로 입력을 받아낸다."""
+
+    def __init__(self, multi_crop=False):
+        self.multi_crop = multi_crop
+
+    def __call__(self, sample):
+        input, target = sample['input'], sample['target']
+
+        # swap color axis because
+        # numpy image: H x W x C or N x H x W x C
+        # torch image: C X H X W or N x C X H X W
+        if not self.multi_crop:
+            input = input.transpose((2, 0, 1))
+            target = target.transpose((2, 0, 1))
+        else:
+            input = input.transpose((0, 3, 1, 2))
+            target = target.transpose((0, 3, 1, 2))
+
+        return {'input': torch.from_numpy(input),
+                'target': torch.from_numpy(target)}
 
 
 class ToTensor_stack_with_design(object):
