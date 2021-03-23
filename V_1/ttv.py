@@ -76,7 +76,7 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
 
     mynet = models_v1.NPR_net_stack_v2(params, ch_in=10, kernel_size=3, tile_length=4, n_layers=12,
                                        length_inter_tile=7, epsilon=0.01, pad_mode=1, unfolded_loss=False,
-                                       norm_in_window=False, W_half=False).train().to(device)
+                                       norm_in_window=True, W_half=False).train().to(device)
 
     """SAVING THE TENSORBOARD"""
     out_tensorboard_folder_name = params["time_saving_folder"] + "/tensorboards"

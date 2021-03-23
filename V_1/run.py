@@ -9,7 +9,7 @@ import V_1.ttv as ttv
 
 params_default = {
     # 1. Mode selection
-    "mini_batch": True,  # mini batch
+    "mini_batch": False,  # mini batch
 
     'boundary_stack_mode': False,
 
@@ -20,16 +20,16 @@ params_default = {
     # 2. Data load
     'ref_pt': False,
     'no_boundary_for_input': True,
-        'no_boundary_for_design': True,  # ref의 boundary여부도 이를 따름.
+    'no_boundary_for_design': True,  # ref의 boundary여부도 이를 따름.
 
-        # 3. Design matrix
-        "grid_order": 2,
+    # 3. Design matrix
+    "grid_order": 2,
 
-        # 4. Image and batch size & iterations
-        'batch_size': 6,  # 32  배치사이즈가 지나치게 크게 되면 자동으로 잘라준다.
-        'epochs': 2000,
-        'tile_length': 4,
-        'patch_size': 200,  # 200
+    # 4. Image and batch size & iterations
+    'batch_size': 6,  # 32  배치사이즈가 지나치게 크게 되면 자동으로 잘라준다.
+    'epochs': 2000,
+    'tile_length': 4,
+    'patch_size': 200,  # 200
         'multi_crop': False,
 
         # 5. Normalization
