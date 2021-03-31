@@ -136,7 +136,6 @@ class loss_for_stit_v1(object):
             data_loss = self.SMAPE_loss(input, target)
         else:
             data_loss = self.l1_loss(input, target)
-
         return data_loss
 
 
@@ -149,4 +148,3 @@ class loss_for_stit_v1(object):
 
     def l2_loss(self, output, target):
         return torch.mean(torch.square(output - target))
-

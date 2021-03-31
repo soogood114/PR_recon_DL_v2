@@ -3,6 +3,7 @@ import torch.nn.functional as F
 import torch
 
 import Feed_and_Loss.loss as my_loss
+import Models.resnet as resnet
 
 import Models.net_op as net_op
 import Data.exr as exr
@@ -245,11 +246,16 @@ class NPR_net_stack_v2(nn.Module):
     - low weighted W : cholesky, LU 등 방법으로 W에 크기를 줄임.
     - refine the W generator : 먼저 R matrix -> unfolding을 위한 채널 늘리기.
 
+    정리
+    - loss of unfolded : 결과는 잘 나오는 것처럼 보이지만 학습이 안됨. 그리고 이렇다고 해서 tile효과가 없지는 것도 아님.
+    - overlapping : 이건 위에서 loss of unfolded에 합쳐짐.
+    - norm in prediction window : 오히려 학습이 잘 안됨.
+    - half W : cholesky decomposition을 하여 학습이 더 잘되게 만듦. 빠르고 정확 !!
 
     """
 
     def __init__(self, params, ch_in=10, kernel_size=3, tile_length=4, n_layers=12, length_inter_tile=5, epsilon=0.01,
-                 pad_mode=0, unfolded_loss=True, norm_in_window=True, W_half=False):
+                 pad_mode=0, unfolded_loss=True, norm_in_window=True, W_half=False, only_diag=False, is_resnet=True):
         super(NPR_net_stack_v2, self).__init__()
 
         self.ch_in = ch_in
@@ -292,26 +298,36 @@ class NPR_net_stack_v2(nn.Module):
         else:
             self.final_ch = int((ft ** 2) * self.inter_tile_num)
 
+        # 임시 실험
+        self.only_diag = only_diag
+        if self.only_diag:
+            self.final_ch = int(ft * self.inter_tile_num)
 
         self.inter_ch = 1024
 
-        self.layers = [nn.Conv2d(self.start_ch, self.inter_ch, kernel_size, padding=(kernel_size - 1) // 2),
-                       nn.LeakyReLU()]
-
-        for l in range(n_layers - 2):
-            self.layers += [
-                nn.Conv2d(self.inter_ch, self.inter_ch, kernel_size, padding=(kernel_size - 1) // 2),
-                nn.LeakyReLU()
-            ]
-
-        self.feature_layers_feed = nn.Sequential(*self.layers)  # to get the feature
-
-        self.layers_for_weights_feed = nn.Conv2d(self.inter_ch, self.final_ch, kernel_size,
-                                            padding=(kernel_size - 1) // 2)
+        self.layers = [nn.Conv2d(self.start_ch, self.inter_ch, kernel_size, padding=(kernel_size - 1) // 2)]
+        if is_resnet:
+            for l in range(n_layers // 2 - 1):
+                self.layers += [
+                    resnet.Resblock_2d(self.inter_ch, self.inter_ch, self.inter_ch, kernel_size)
+                ]
+            self.feature_layers_feed = nn.Sequential(*self.layers)  # to get the feature
+            self.layers_for_weights_feed = nn.Conv2d(self.inter_ch, self.final_ch, kernel_size,
+                                                     padding=(kernel_size - 1) // 2)
+        else:
+            for l in range(n_layers - 2):
+                self.layers += [
+                    nn.Conv2d(self.inter_ch, self.inter_ch, kernel_size, padding=(kernel_size - 1) // 2),
+                    nn.LeakyReLU()
+                ]
+            self.feature_layers_feed = nn.Sequential(*self.layers)  # to get the feature
+            self.layers_for_weights_feed = nn.Conv2d(self.inter_ch, self.final_ch, kernel_size,
+                                                     padding=(kernel_size - 1) // 2)
 
         # self.layers_for_weights_feed.weight.data.fill_(0.0)
         # self.layers_for_weights_feed.bias.data.fill_(0.0)
 
+        self.leaky_relu = nn.LeakyReLU()
 
     def forward(self, input, design, gt, Flag_stack_result=False):
         """
@@ -367,43 +383,47 @@ class NPR_net_stack_v2(nn.Module):
         if self.unfolded_loss:
             domain = design.view(b * hw_d * num_inter, t_de, ch_de).contiguous()  # b * hw_d * num_inter, t_de, ch_de
         else:
-            domain = design[:, num_inter//2, :, :].contiguous()  # b * hw_d, t_de, ch_de
+            domain = design[:, num_inter // 2, :, :].contiguous()  # b * hw_d, t_de, ch_de
 
         X = design[:, :, :t, :]
         X = X.view(b * hw_d * num_inter, t, ch_de)
-
 
         "GET THE FEATURE FROM FEATURE NETWORK"
         feature = self.feature_layers_feed(input.view(b, t * ch_in, h_d, w_d))
 
         "W FROM THE FEATURE"  # 여기서 메모리가 뻥튀기 됨.
-        if self.W_half:
+        if self.only_diag:
             W = self.layers_for_weights_feed(feature)
-            W = W.permute(0, 2, 3, 1).contiguous().view((b * hw_d) * num_inter, self.numel_W_half)
-
-            ### debug ###
-            # W_half_debug = W.cpu().detach().numpy()
-            ###       ###
-
-            W = self.make_full_W_cholesky(W)
-
-            ### debug ###
-            # W_debug = W.cpu().detach().numpy()
-            ###       ###
+            W = W.permute(0, 2, 3, 1).contiguous().view((b * hw_d) * num_inter, t)
+            W = self.make_full_W_only_diag(W)
 
         else:
-            W = torch.tanh(self.layers_for_weights_feed(feature))  # [-1, 1]
-            W = W.view(b, num_inter, t, t, h_d, w_d)
-            W = W.permute(0, 4, 5, 1, 2, 3).contiguous().view(b * hw_d * num_inter, t, t)
+            if self.W_half:
+                W = self.layers_for_weights_feed(feature)
+                W = W.permute(0, 2, 3, 1).contiguous().view((b * hw_d) * num_inter, self.numel_W_half)
 
-            # positive definite
-            W = torch.bmm(W, W.permute(0, 2, 1))
-            W = W + (torch.eye(W.size(1)).cuda())
+                ### debug ###
+                # W_half_debug = W.cpu().detach().numpy()
+                ###       ###
 
-            ### debug ###
-            # W_debug = W.cpu().detach().numpy()
-            ###       ###
+                W = self.make_full_W_cholesky(W)
 
+                ### debug ###
+                # W_debug = W.cpu().detach().numpy()
+                ###       ###
+
+            else:
+                W = torch.tanh(self.layers_for_weights_feed(feature))  # [-1, 1]
+                W = W.view(b, num_inter, t, t, h_d, w_d)
+                W = W.permute(0, 4, 5, 1, 2, 3).contiguous().view(b * hw_d * num_inter, t, t)
+
+                # positive definite
+                W = torch.bmm(W, W.permute(0, 2, 1))
+                W = W + (torch.eye(W.size(1)).cuda())
+
+                ### debug ###
+                # W_debug = W.cpu().detach().numpy()
+                ###       ###
 
         "XTW & XTWX FOR NORMAL EQUATION"
         XTW = torch.bmm(X.permute(0, 2, 1), W)  # (b*hw_d)*num_inter, num_design, tile_size2
@@ -412,8 +432,9 @@ class NPR_net_stack_v2(nn.Module):
         "A = XTWX_sum FOR AX = B, LEAST SQUARE"
         XTWX_sum = torch.sum(XTWX.view(b * hw_d, num_inter, ch_de, ch_de), dim=1)
         # for stability, add the diagonal term
-        XTWX_sum = XTWX_sum + (torch.eye(XTWX_sum.size(1)).cuda()) * self.epsilon  # A from Ax=B
-
+        regular_term = (torch.eye(XTWX_sum.size(1)).cuda()) * self.epsilon
+        regular_term[0, 0] = 0
+        XTWX_sum = XTWX_sum + regular_term  # A from Ax=B
 
         "REGRESSION FOR EACH CHANNEL AND LOSS CALCULATION"
 
@@ -543,7 +564,7 @@ class NPR_net_stack_v2(nn.Module):
 
         return design
 
-    def make_full_W(self, W_half, epsilon=0.01):
+    def make_full_W(self, W_half, epsilon=0.1):
         "기존 것과는 다르게 [-1, 1] 사이로 하지 않음. covariance 형태로 갈 예정"
         "또한 W_half 형태도 바꿀 예정 : (b*hw//tile_size)*num_inter, num_W_half"
 
@@ -554,12 +575,11 @@ class NPR_net_stack_v2(nn.Module):
 
         index = 0
         for i in range(tile_size):
-            diag = torch.sigmoid(W_half[:, index])
-            W_full[:, i, i] = diag + epsilon
-
+            diag = torch.relu(W_half[:, index])  # torch.sigmoid(W_half[:, index])
+            W_full[:, i, i] = diag + 1.0 + epsilon
             # no_diag = torch.tanh(W_half[:, (index + 1):(index + 1) + (tile_size - 1 - i)]) * diag.unsqueeze(1)
-            if not i==tile_size-1:
-                no_diag = torch.tanh(W_half[:, (index + 1):(index + 1) + (tile_size - 1 - i)])
+            if not i == tile_size - 1:
+                no_diag = torch.tanh(self.leaky_relu(W_half[:, (index + 1):(index + 1) + (tile_size - 1 - i)]))
                 # no_diag_absmax = torch.max(torch.abs(no_diag), 1, True)[0]
                 # W_full[:, i, i+1:] = (no_diag / (no_diag_absmax + 0.0001)) * diag.unsqueeze(1)
                 # W_full[:, i+1:, i] = (no_diag / (no_diag_absmax + 0.0001)) * diag.unsqueeze(1)
@@ -574,21 +594,42 @@ class NPR_net_stack_v2(nn.Module):
 
         return W_full
 
+    def make_full_W_only_diag(self, W_half):
+        "오직 diag만 있는 것 그래서 GLS가 아닌 WLS가 됨."
+        tile_size = self.tile_size
+
+        U = torch.zeros((W_half.size(0), tile_size, tile_size), dtype=W_half.dtype,
+                        layout=W_half.layout, device=W_half.device)
+        for i in range(tile_size):
+            diag = torch.sigmoid(W_half[:, i])
+            U[:, i, i] = diag
+
+        ### debug ###
+        # U_debug = U.cpu().detach().numpy()
+        ###       ###
+
+        W_full = torch.bmm(U.permute(0, 2, 1), U)
+
+        ### debug ###
+        # W_full_debug = W_full.cpu().detach().numpy()
+        ###       ###
+
+        return W_full
+
     def make_full_W_cholesky(self, W_half, epsilon=0.01):
         "기존 것과는 다르게 [-1, 1] 사이로 하지 않음. covariance 형태로 갈 예정"
         "또한 W_half 형태도 바꿀 예정 : (b*hw//tile_size)*num_inter, num_W_half"
         tile_size = self.tile_size
 
         U = torch.zeros((W_half.size(0), tile_size, tile_size), dtype=W_half.dtype,
-                             layout=W_half.layout, device=W_half.device)
+                        layout=W_half.layout, device=W_half.device)
         index = 0
         for i in range(tile_size):
-
             diag = torch.sigmoid(W_half[:, index])
             U[:, i, i] = diag + epsilon
 
             no_diag = torch.tanh(W_half[:, (index + 1):(index + 1) + (tile_size - 1 - i)])
-            U[:, i, i+1:] = no_diag
+            U[:, i, i + 1:] = no_diag
             U[:, i + 1:, i] = no_diag
             index += 1 + (tile_size - 1 - i)
 
@@ -601,6 +642,361 @@ class NPR_net_stack_v2(nn.Module):
         ### debug ###
         # W_full_debug = W_full.cpu().detach().numpy()
         ###       ###
+
+        return W_full
+
+
+class NPR_net_stack_chain_reg(nn.Module):
+    """
+    네트워크 개요
+    - NPR_net_stack_v2 구조를 활용함.
+    - W feature extraction layer를 resnet이나 그 이상의 구조를 택할 것임
+    - stacking regression으로 (ex. double 3x3 = 7x7) GPU 메모리 최적화.
+    - 이는 나중에 적용이될 design feature를 형성하는 AE를 넣어주기 위함.
+    - input decomposition : albedo 또는 high value
+    - weight decay등 normalization 활용
+
+    새로 추가된 기능
+    - refine the W generator : resnet 그리고 먼저 R matrix -> unfolding을 위한 채널 늘리기.
+    - 3d conv 활용 : 아직은 확정은 아니지만 실험을 하고자 함.
+    - input decomposition :
+    """
+
+    def __init__(self, params, ch_in=10, kernel_size=3, tile_length=4, n_layers=12, length_inter_tile=3, num_reg=6,
+                 epsilon=0.01, pad_mode=0, unfolded_loss=True, norm_in_window=True, W_half=False, is_resnet=False):
+        super(NPR_net_stack_chain_reg, self).__init__()
+
+        self.ch_in = ch_in
+        self.k_size = kernel_size
+        self.tile_length = tile_length
+
+        self.tile_size = tile_length ** 2
+        self.tile_size_stit = tile_length ** 2 + tile_length * 2
+
+        self.epsilon = epsilon
+
+        self.pad_mode = pad_mode  # 0: zero, 1: reflected, 2: circular
+
+        self.length_inter = length_inter_tile
+        self.inter_tile_num = int(length_inter_tile ** 2)
+
+        self.no_stit_input = params["no_boundary_for_input"]
+        self.no_stit_design = params["no_boundary_for_design"]
+
+        "new features"
+        self.num_reg = num_reg
+        # overlapping
+        self.norm_in_window = norm_in_window
+        self.unfolded_loss = unfolded_loss
+        self.W_half = W_half
+
+        # loss
+        self.loss_fn = my_loss.loss_for_stit_v1(params['tile_length'], params["stitching_weights"], params['loss_type'])
+
+        if self.no_stit_input:
+            self.start_ch = ch_in * self.tile_size
+            ft = self.tile_size
+        else:
+            self.start_ch = ch_in * self.tile_size_stit
+            ft = self.tile_size_stit
+
+        if self.W_half:
+            self.numel_W_half = int((ft * (ft + 1)) / 2)
+            self.final_ch = int(self.numel_W_half * self.inter_tile_num * self.num_reg)
+        else:
+            self.final_ch = int((ft ** 2) * self.inter_tile_num * self.num_reg)
+
+        self.inter_ch = 1024
+
+        self.layers = [nn.Conv2d(self.start_ch, self.inter_ch, kernel_size, padding=(kernel_size - 1) // 2)]
+        if is_resnet:
+            for l in range(n_layers // 2 - 1):
+                self.layers += [
+                    resnet.Resblock_2d(self.inter_ch, self.inter_ch, self.inter_ch, kernel_size)
+                ]
+            self.feature_layers_feed = nn.Sequential(*self.layers)  # to get the feature
+            self.layers_for_weights_feed = nn.Conv2d(self.inter_ch, self.final_ch, kernel_size,
+                                                     padding=(kernel_size - 1) // 2)
+        else:
+            for l in range(n_layers - 2):
+                self.layers += [
+                    nn.Conv2d(self.inter_ch, self.inter_ch, kernel_size, padding=(kernel_size - 1) // 2),
+                    nn.LeakyReLU()
+                ]
+            self.feature_layers_feed = nn.Sequential(*self.layers)  # to get the feature
+            self.layers_for_weights_feed = nn.Conv2d(self.inter_ch, self.final_ch, kernel_size,
+                                                     padding=(kernel_size - 1) // 2)
+        self.leaky_relu = nn.LeakyReLU()
+
+    def forward(self, input, design, gt, Flag_stack_result=False):
+        """
+        input : B T(tile_size) C_in H_d W_d
+        design : B T(tile_size) C_de H_d W_d
+
+        특이하게 gt를 넣어서 loss까지 한방에 계산을 하도록 함.
+        output : resulting image and loss
+
+        """
+        "INITIAL SETTING"
+        b = input.size(0)
+        ch_in = input.size(2)  # 10 (color + g_buffer)
+        ch_de = design.size(2)
+        h_d, w_d = input.size(3), input.size(4)
+        hw_d = h_d * w_d
+        t_de = design.size(1)
+
+        s = self.tile_length
+        # t = self.tile_size_stit  # 24
+        t = input.size(1)
+
+        length_inter = self.length_inter  # length of inter tile
+        num_inter = length_inter ** 2
+        num_reg = self.num_reg
+
+        out = torch.zeros((b, t_de, 3, h_d, w_d), dtype=input.dtype, layout=input.layout,
+                          device=input.device)
+
+        if self.unfolded_loss:
+            out_for_loss = torch.zeros((b * hw_d * num_inter, t_de, 3), dtype=input.dtype, layout=input.layout,
+                                       device=input.device)
+        else:
+            out_for_loss = torch.zeros((b * hw_d, t_de, 3), dtype=input.dtype, layout=input.layout,
+                                       device=input.device)
+
+        "UNFOLD DESIGN MATRIX"
+        design = design.view(b, t_de * ch_de, h_d, w_d)  # 5D -> 4D
+        design = self.unfold_and_padding(design)  # b, t_de * ch_de * num_inter, hw_d
+
+        "X FROM DESIGN MATRIX"
+        design = design.permute(0, 2, 1).contiguous().view(b * hw_d, t_de * ch_de, num_inter)
+        design = design.permute(0, 2, 1).contiguous().view(b * hw_d * num_inter, t_de * ch_de)
+
+        design = design.view(b * hw_d, num_inter, t_de, ch_de)  # b * hw_d * num_inter, t_de, ch_de
+
+        "v2 : norm in each prediction window according to channel"
+        if self.norm_in_window:
+            design = self.norm_in_prediction_window(design)
+        # design = design.view(b * hw_d, num_inter, t_de, ch_de)
+
+        # domain and X
+        if self.unfolded_loss:
+            domain = design.view(b * hw_d * num_inter, t_de, ch_de).contiguous()  # b * hw_d * num_inter, t_de, ch_de
+        else:
+            domain = design[:, num_inter // 2, :, :].contiguous()  # b * hw_d, t_de, ch_de
+
+        X = design[:, :, :t, :]
+        X = X.view(b * hw_d * num_inter, t, ch_de)
+
+        "GET THE FEATURE FROM FEATURE NETWORK"
+        feature = self.feature_layers_feed(input.view(b, t * ch_in, h_d, w_d))
+
+        "W FROM THE FEATURE"  # 여기서 메모리가 뻥튀기 됨.
+
+        if self.W_half:
+            W_multi_reg = self.layers_for_weights_feed(feature)
+            W_multi_reg = W_multi_reg.permute(0, 2, 3, 1).contiguous(). \
+                view((b * hw_d) * num_inter * num_reg, self.numel_W_half)
+
+            W_multi_reg = self.make_full_W_cholesky(W_multi_reg)
+        else:
+            W_multi_reg = torch.tanh(self.layers_for_weights_feed(feature))  # [-1, 1]
+            W_multi_reg = W_multi_reg.view(b, num_inter * num_reg, t, t, h_d, w_d)
+            W_multi_reg = W_multi_reg.permute(0, 4, 5, 1, 2, 3).contiguous().view(b * hw_d * num_inter * num_reg, t, t)
+
+            # positive definite
+            W_multi_reg = torch.bmm(W_multi_reg, W_multi_reg.permute(0, 2, 1))
+            W_multi_reg = W_multi_reg + (torch.eye(W_multi_reg.size(1)).cuda())
+
+        W_multi_reg = W_multi_reg.view(b * hw_d * num_inter, num_reg, t, t)
+
+        regular_term = (torch.eye(ch_de).cuda()) * self.epsilon
+        regular_term[0, 0] = 0
+
+        "GT from gt for loss calculation"
+        ref_for_loss = gt.view(b, t_de * 3, h_d, w_d)  # b, t, 3, h_d, w_d
+
+        if self.unfolded_loss:
+            ref_for_loss = self.unfold_and_padding(ref_for_loss)  # b, t * 3 * num_inter, hw_d
+            ref_for_loss = ref_for_loss.permute(0, 2, 1).contiguous().view(b * hw_d, t_de * 3, num_inter)
+
+            # (b * hw_d * num_inter), t, 3
+            ref_for_loss = ref_for_loss.permute(0, 2, 1).contiguous().view(b * hw_d * num_inter, t_de, 3)
+        else:
+            # (b * hw_d), t, 3
+            ref_for_loss = ref_for_loss.permute(0, 2, 3, 1).contiguous().view(b * hw_d, t_de, 3)
+
+        for i_reg in range(num_reg):
+            W = W_multi_reg[:, i_reg, :, :]  # b * hw_d * num_inter, t, t
+
+            "XTW & XTWX FOR NORMAL EQUATION"
+            XTW = torch.bmm(X.permute(0, 2, 1), W)  # (b*hw_d)*num_inter, num_design, tile_size2
+            XTWX = torch.bmm(XTW, X)  # (b*hw_d)*num_inter, num_design, num_design,
+
+            "A = XTWX_sum FOR AX = B, LEAST SQUARE"
+            XTWX_sum = torch.sum(XTWX.view(b * hw_d, num_inter, ch_de, ch_de), dim=1)
+            # for stability, add the diagonal term
+
+            XTWX_sum = XTWX_sum + regular_term  # A from Ax=B
+
+            if i_reg == 0:
+                Y_3ch = input
+            else:
+                Y_3ch = out
+
+            "REGRESSION FOR EACH CHANNEL AND LOSS CALCULATION"
+            for ch in range(3):
+                "Y FROM INPUT OR OUTPUT"
+                Y = Y_3ch[:, :, ch, :, :]  # b, t, h_d, w_d
+                Y = self.unfold_and_padding(Y)  # b, t * num_inter, hw_d
+
+                Y = Y.permute(0, 2, 1).contiguous().view(b * hw_d, t, num_inter)
+                Y = Y.permute(0, 2, 1).contiguous().view(b * hw_d * num_inter, t).unsqueeze(2)
+
+                XTWY = torch.bmm(XTW, Y)
+
+                "B = XTWY_sum FOR AX = B, LEAST SQUARE"
+                XTWY_sum = torch.sum(XTWY.view(b * hw_d, num_inter, ch_de, 1), dim=1)  # B from Ax=B
+
+                "SOLVING LEAST SQUARE OF AX = B"
+                para, _ = torch.solve(XTWY_sum, XTWX_sum)  # (b * hw_d), ch_de, 1
+
+                if self.unfolded_loss:
+                    # modifying para for applying to unfolded data  # (b * hw_d) * num_inter, ch_de, 1
+                    para = para.unsqueeze(1).repeat(1, num_inter, 1, 1).view((b * hw_d) * num_inter, ch_de, 1)
+
+                "PREDICTION FOR DE NOISED COLOR BY PARA"
+                out_1ch = torch.bmm(domain, para)  # (b*hw_d), t, 1 or (b*hw_d*num_inter), t, 1
+                out_for_loss[:, :, ch] = out_1ch.squeeze(2)
+
+                if self.unfolded_loss:
+                    out_1ch = out_1ch.view(b, hw_d, num_inter, t_de)
+                    out_1ch = out_1ch.permute(0, 3, 2, 1).contiguous()  # b, t, num_inter, hw_d
+                    out_1ch = out_1ch.view(b, t_de * num_inter, hw_d)
+
+                    ones = torch.ones_like(out_1ch)
+                    ones_over = F.fold(ones, output_size=(h_d, w_d), kernel_size=length_inter,
+                                       padding=length_inter // 2)
+
+                    out_1ch_over = F.fold(out_1ch, output_size=(h_d, w_d), kernel_size=length_inter,
+                                          padding=length_inter // 2) / ones_over
+
+                    out[:, :, ch, :, :] = out_1ch_over
+
+                else:
+                    out_1ch = out_1ch.view(b, h_d, w_d, t_de)
+                    out[:, :, ch, :, :] = out_1ch.permute(0, 3, 1, 2)
+
+        "GET LOSS VALUE"
+        Loss = self.loss_fn(out_for_loss, ref_for_loss)
+
+        return out, Loss
+
+    def unfold_and_padding(self, x):
+        """
+        input : x (4D)
+        output : Unfolded x
+        feature #1 : unfolding을 하는 함수. padding mode를 조절할 수 있음.
+        """
+        kernel_length = self.length_inter
+        if self.pad_mode > 0:
+            pad = (kernel_length // 2, kernel_length // 2, kernel_length // 2, kernel_length // 2)
+            if self.pad_mode == 1:
+                x = nn.functional.pad(x, pad, mode='reflect')
+            elif self.pad_mode == 2:
+                x = nn.functional.pad(x, pad, mode='circular')
+            else:
+                x = nn.functional.pad(x, pad, mode='reflect')
+
+            x_unfolded = F.unfold(x, kernel_length, padding=0)
+        elif self.pad_mode == 0:  # zero padding
+            # automatically zero padding
+            x_unfolded = F.unfold(x, kernel_length, padding=kernel_length // 2)
+        else:
+            # image resolution gonna be reduced
+            x_unfolded = F.unfold(x, kernel_length, padding=0)
+
+        return x_unfolded
+
+    def norm_in_prediction_window(self, design):
+        """
+                input : design (b*hw_d, inter_tile, t, ch_de)
+                output : normalized design in terms of a prediction window
+                feature #1 : 꼭 input 형태에 유의를 할 필요가 있음.
+        """
+
+        def min_max_norm(input):
+            # input : b*hw_d, inter_tile, t, C
+            a = input.dim()
+            # min max
+            if a == 4:
+                min_input = torch.min(torch.min(torch.min(input, 1, True)[0], 2, True)[0], 3, True)[0]
+                max_input = torch.max(torch.max(torch.max(input, 1, True)[0], 2, True)[0], 3, True)[0]
+            else:
+                min_input = torch.min(torch.min(input, 1, True)[0], 2, True)[0]
+                max_input = torch.max(torch.max(input, 1, True)[0], 2, True)[0]
+
+            return (input - min_input) / (max_input - min_input + 0.001)
+
+        bhw_d, inter_tile, t, ch_de = design.size()
+
+        # albedo
+        design[:, :, :, 1:4] = min_max_norm(design[:, :, :, 1:4])
+
+        # depth
+        design[:, :, :, 4] = min_max_norm(design[:, :, :, 4])
+
+        # normal
+        design[:, :, :, 5:8] = min_max_norm(design[:, :, :, 5:8])
+
+        # grid
+        ch_grid = ch_de - 8
+        for i in range(ch_grid):
+            design[:, :, :, 8 + i] = min_max_norm(design[:, :, :, 8 + i])
+
+        return design
+
+    def make_full_W_only_diag(self, W_half):
+        "오직 diag만 있는 것 그래서 GLS가 아닌 WLS가 됨."
+        tile_size = self.tile_size
+
+        U = torch.zeros((W_half.size(0), tile_size, tile_size), dtype=W_half.dtype,
+                        layout=W_half.layout, device=W_half.device)
+        for i in range(tile_size):
+            diag = torch.sigmoid(W_half[:, i])
+            U[:, i, i] = diag
+
+        ### debug ###
+        # U_debug = U.cpu().detach().numpy()
+        ###       ###
+
+        W_full = torch.bmm(U.permute(0, 2, 1), U)
+
+        ### debug ###
+        # W_full_debug = W_full.cpu().detach().numpy()
+        ###       ###
+
+        return W_full
+
+    def make_full_W_cholesky(self, W_half, epsilon=0.01):
+        "기존 것과는 다르게 [-1, 1] 사이로 하지 않음. covariance 형태로 갈 예정"
+        "또한 W_half 형태도 바꿀 예정 : (b*hw//tile_size)*num_inter, num_W_half"
+        tile_size = self.tile_size
+
+        U = torch.zeros((W_half.size(0), tile_size, tile_size), dtype=W_half.dtype,
+                        layout=W_half.layout, device=W_half.device)
+        index = 0
+        for i in range(tile_size):
+
+            diag = torch.sigmoid(W_half[:, index])
+            U[:, i, i] = diag + epsilon
+
+            no_diag = torch.tanh(W_half[:, (index + 1):(index + 1) + (tile_size - 1 - i)])
+            U[:, i, i+1:] = no_diag
+            U[:, i + 1:, i] = no_diag
+            index += 1 + (tile_size - 1 - i)
+
+        W_full = torch.bmm(U.permute(0, 2, 1), U)
+
 
         return W_full
 

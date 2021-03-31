@@ -209,3 +209,126 @@ class Back_bone_NGPT_v1(nn.Module):
         final_out = self.de3_up_conv_relu(self.de3_up_conv(o_de3))
 
         return final_out
+
+
+class Back_bone_NGPT_v2(nn.Module):
+    """네트워크 설명"""
+    """ 인풋 : 각각 들어간다.  아웃풋 : 타일"""
+    """ SIGA19에서 나온 supervised 논문에서의 네트워크를 구현"""
+    """ v1과는 다른 것은 layer가 적어서 좀더 가볍다는 것."""
+
+    def __init__(self, channels_in=5, out_dim=3):
+        super(Back_bone_NGPT_v2, self).__init__()
+
+        self.channels_in = channels_in  # RGB + Features
+
+        # self.Kernel_size = kernel_size
+        # self.k_size = pred_kernel
+
+        """First encoding block"""
+        self.en1_PU1 = NGPT_PU(channels_in, 20)
+        self.en1_PU2 = NGPT_PU(channels_in + 20, 20)
+        self.en1_PU3 = NGPT_PU(channels_in + 20 * 2, 20)
+        self.en1_PU4 = NGPT_PU(channels_in + 20 * 3, 20)
+
+        # down
+        self.en1_down_conv = nn.Conv2d(20 * 4 + channels_in, 80, 2, stride=2)
+        self.en1_down_conv_relu = nn.LeakyReLU()
+        self.en1_num_ch = 20 * 4 + channels_in
+
+        """Second encoding block"""
+        self.en2_PU1 = NGPT_PU(80, 40)
+        self.en2_PU2 = NGPT_PU(80 + 40, 40)
+        self.en2_PU3 = NGPT_PU(80 + 40 * 2, 40)
+
+        # down
+        self.en2_down_conv = nn.Conv2d(40 * 3 + 80, 80, 2, stride=2)
+        self.en2_down_conv_relu = nn.LeakyReLU()
+        self.en2_num_ch = 40 * 3 + 80
+
+        """Latent encoding block"""
+        self.l_PU1 = NGPT_PU(80, 40)
+        self.l_PU2 = NGPT_PU(80 + 40, 40)
+        self.l_PU3 = NGPT_PU(80 + 40 * 2, 40)
+        self.l_PU4 = NGPT_PU(80 + 40 * 3, 40)
+
+        # up
+        self.l_up_conv = nn.ConvTranspose2d(40 * 4 + 80, 80, 2, stride=2, padding=0)
+        self.l_up_conv_relu = nn.LeakyReLU()
+        self.l_num_ch = 40 * 4 + 80
+
+        """Second decoding block"""
+        self.de2_PU1 = NGPT_PU(80 + self.en2_num_ch, 40)
+        self.de2_PU2 = NGPT_PU(80 + self.en2_num_ch + 40, 40)
+        self.de2_PU3 = NGPT_PU(80 + self.en2_num_ch + 40 * 2, 40)
+
+        # up
+        self.de2_up_conv = nn.ConvTranspose2d(80 + self.en2_num_ch + 40 * 3, 40, 2, stride=2, padding=0)
+        self.de2_up_conv_relu = nn.LeakyReLU()
+
+        """Third decoding block"""
+        self.de3_PU1 = NGPT_PU(40 + self.en1_num_ch, 20)
+        self.de3_PU2 = NGPT_PU(40 + self.en1_num_ch + 20, 20)
+        self.de3_PU3 = NGPT_PU(40 + self.en1_num_ch + 20 * 2, 20)
+        self.de3_PU4 = NGPT_PU(40 + self.en1_num_ch + 40 * 3, 20)
+
+        # down -> out_ch
+        self.de3_up_conv = nn.Conv2d(40 + self.en1_num_ch + 20 * 4, out_dim, 3, padding=1)
+        self.de3_up_conv_relu = nn.LeakyReLU()
+
+    def forward(self, input):
+        """First encoding block"""
+        o_en1 = torch.cat((input, self.en1_PU1(input)), dim=1)
+
+        o_en1 = torch.cat((o_en1, self.en1_PU2(o_en1)), dim=1)
+
+        o_en1 = torch.cat((o_en1, self.en1_PU3(o_en1)), dim=1)
+
+        o_en1 = torch.cat((o_en1, self.en1_PU4(o_en1)), dim=1)
+
+        o_en1_D = self.en1_down_conv_relu(self.en1_down_conv(o_en1))
+
+        """Second encoding block"""
+        o_en2 = torch.cat((o_en1_D, self.en2_PU1(o_en1_D)), dim=1)
+
+        o_en2 = torch.cat((o_en2, self.en2_PU2(o_en2)), dim=1)
+
+        o_en2 = torch.cat((o_en2, self.en2_PU3(o_en2)), dim=1)
+
+        o_en2_D = self.en2_down_conv_relu(self.en2_down_conv(o_en2))
+
+        """Latent encoding block"""
+        o_l = torch.cat((o_en2_D, self.l_PU1(o_en2_D)), dim=1)
+
+        o_l = torch.cat((o_l, self.l_PU2(o_l)), dim=1)
+
+        o_l = torch.cat((o_l, self.l_PU3(o_l)), dim=1)
+
+        o_l = torch.cat((o_l, self.l_PU4(o_l)), dim=1)
+
+        o_l_U = self.l_up_conv_relu(self.l_up_conv(o_l))
+
+        """Second decoding block"""
+        o_de2 = torch.cat((o_en2, o_l_U), dim=1)
+
+        o_de2 = torch.cat((o_de2, self.de2_PU1(o_de2)), dim=1)
+
+        o_de2 = torch.cat((o_de2, self.de2_PU2(o_de2)), dim=1)
+
+        o_de2 = torch.cat((o_de2, self.de2_PU3(o_de2)), dim=1)
+
+        o_de2_U = self.de2_up_conv_relu(self.de2_up_conv(o_de2))
+
+        """Third decoding block"""
+        o_de3 = torch.cat((o_en1, o_de2_U), dim=1)
+
+        o_de3 = torch.cat((o_de3, self.de3_PU1(o_de3)), dim=1)
+
+        o_de3 = torch.cat((o_de3, self.de3_PU2(o_de3)), dim=1)
+
+        o_de3 = torch.cat((o_de3, self.de3_PU3(o_de3)), dim=1)
+
+        o_de3 = torch.cat((o_de3, self.de3_PU4(o_de3)), dim=1)
+        final_out = self.de3_up_conv_relu(self.de3_up_conv(o_de3))
+
+        return final_out

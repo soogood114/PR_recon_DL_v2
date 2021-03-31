@@ -214,7 +214,6 @@ def get_all_stack_npy_for_input_buffer(dataset_dirs, common_name="total_s_4_", r
     return np.concatenate((all_throughput_stack + all_direct_stack, all_g_buffer_stack), axis=4), all_GT_stack
 
 
-
 def get_all_img_npy_for_input_buffer(dataset_dirs, common_name="total_s_4_"):
     """
     input : dataset dir pth
@@ -229,6 +228,28 @@ def get_all_img_npy_for_input_buffer(dataset_dirs, common_name="total_s_4_"):
     return np.concatenate((all_throughput_img + all_direct_img, all_g_buffer_img), axis=3), all_GT_img
 
 
+def get_all_img_exr_from_stack_npy(DIR, mini_batch=True, test_mode=False):
+    """ mini batch, test mode 를 고려해서 npy를 가져와 image혈태의 data로 출력"""
+    """ 그러나 gradient와 pth tracing을 학습을 시킬 수 없음."""
+
+    DIR += "npy/"
+
+    if mini_batch:
+        train_pth = DIR + "3. mini_batch/"
+    else:
+        train_pth = DIR + "1. train/"
+
+    test_pth = DIR + "2. test/"
+
+    if not test_mode:
+        train_input_img_buffer, train_ref_img_buffer = get_all_img_npy_for_input_buffer(train_pth)
+        test_input_img_buffer, test_ref_img_buffer = get_all_img_npy_for_input_buffer(test_pth)
+    else:
+        train_input_img_buffer = 0
+        train_ref_img_buffer = 0
+        test_input_img_buffer, test_ref_img_buffer = get_all_img_npy_for_input_buffer(test_pth)
+
+    return train_input_img_buffer, train_ref_img_buffer, test_input_img_buffer, test_ref_img_buffer
 
 
 def get_input_design_stack_and_normalize(dirs, common_name, params):
@@ -267,6 +288,7 @@ def get_input_design_stack_and_normalize(dirs, common_name, params):
         ch_gt = tile_size_stit
 
     return input_stack[:, :, :, :ch_input, :], design_stack[:, :, :, :ch_design, :], GT_stack[:, :, :, :ch_gt, :]
+
 
 
 def get_all_img_exr_for_ttv_v1(DIR, mini_batch=True, test_mode=False, ):

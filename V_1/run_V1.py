@@ -4,8 +4,7 @@ import json
 from datetime import datetime
 
 import Data.load as load
-import V_1.ttv as ttv
-
+import V_1.ttv_V1 as ttv
 
 params_default = {
     # 1. Mode selection
@@ -23,11 +22,11 @@ params_default = {
     'no_boundary_for_design': True,  # ref의 boundary여부도 이를 따름.
 
     # 3. Design matrix
-    "grid_order": 2,
+    "grid_order": 1,
 
     # 4. Image and batch size & iterations
     'batch_size': 6,  # 32  배치사이즈가 지나치게 크게 되면 자동으로 잘라준다.
-    'epochs': 2000,
+    'epochs': 5000,
     'tile_length': 4,
     'patch_size': 200,  # 200
     'multi_crop': False,
@@ -39,26 +38,25 @@ params_default = {
     'loss_type': 'l1',  # l1, l2, smape
     'stitching_weights': 0,  # color loss + stitching loss
 
+    # 7. Optimization
+    'optim': 'adam',
+    'lr': 0.0001,  # default : 0.0001
 
-        # 7. Optimization
-        'optim': 'adam',
-        'lr': 0.0001,  # default : 0.0001
+    # 8. Saving period
+    "para_saving_epoch": 100,  # 100
+    "loss_saving_epoch": 10,  # 10
+    "val_patches_saving_epoch": 100,  # 100
 
-        # 8. Saving period
-        "para_saving_epoch": 100,   # 100
-        "loss_saving_epoch": 10,   # 10
-        "val_patches_saving_epoch": 100,   # 100
+    # 9. Index setting for run and network functions
+    'run_index': 0,
+    'network_index': 1,
+    'time_saving_folder': "tmp",  # it will be made soon
+    'saving_folder_name': "210331_model_stack_v2_epoch_2k_W_half_resnet_mini_resnet",
+    # 210326_model_stack_v2_epoch_2k_W_half_nonorm_smape
+    # 210331_model_stack_v2_patch_size_100_mini_unfolded_no_order
+    'saving_file_name': "model_stack_v2_epoch_2k_W_half_resnet_mini_resnet",
 
-        # 9. Index setting for run and network functions
-        'run_index': 0,
-        'network_index': 1,
-        'time_saving_folder': "tmp",  # it will be made soon
-        'saving_folder_name': "210322_model_stack_v2_epoch_2k_norm_fullW",  # 210319_model_stack_v2_epoch_2k_norm
-        'saving_file_name': "model_stack_v2_epoch_2k",
-
-
-        }
-
+}
 
 
 def data_load_and_run(params=None, gpu_id=1):
@@ -102,19 +100,18 @@ def data_load_and_run(params=None, gpu_id=1):
         dataset_dirs += "npy/"
 
         if params["mini_batch"]:
-                train_dirs = dataset_dirs + "3. mini_batch/"
+            train_dirs = dataset_dirs + "3. mini_batch/"
         else:
-                train_dirs = dataset_dirs + "1. train/"
+            train_dirs = dataset_dirs + "1. train/"
 
         test_dirs = dataset_dirs + "2. test/"
 
         """####################  GET & NORMALIZE INPUT, DESIGN, GT ####################"""
-        train_input_stack, train_design_stack, train_GT_stack =\
+        train_input_stack, train_design_stack, train_GT_stack = \
             load.get_input_design_stack_and_normalize(train_dirs, "total_s_4_", params)
 
         test_input_stack, test_design_stack, test_GT_stack = \
             load.get_input_design_stack_and_normalize(test_dirs, "total_s_4_", params)
-
 
         ttv.train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_stack,
                                       test_input_stack, test_design_stack, test_GT_stack, params)

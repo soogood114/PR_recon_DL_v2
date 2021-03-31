@@ -3,7 +3,6 @@ import os
 from datetime import datetime
 import pickle
 
-
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -44,7 +43,6 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
     H = H_d * params["tile_length"]
     W = W_d * params["tile_length"]
 
-
     """SETTING DATA LOAD AND CORRESPONDING TRANSFORMS"""
     # define transform op
     transform_patch = transforms.Compose([
@@ -56,14 +54,13 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
 
     # train data loader
     train_data = dataset.Supervised_dataset_with_design_v1(train_input_stack, train_design_stack, train_GT_stack,
-                                               train=True, transform=transform_patch)
+                                                           train=True, transform=transform_patch)
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=params['batch_size'], shuffle=True)
 
     # test data loader
     test_data = dataset.Supervised_dataset_with_design_v1(test_input_stack, test_design_stack, test_GT_stack,
-                                                           train=False, transform=transform_img)
+                                                          train=False, transform=transform_img)
     test_loader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
-
 
     """NETWORK INITIALIZATION"""
     # mynet = models_v1.NPR_net_stack_v1(ch_in=10, kernel_size=3, tile_length=4, n_layers=12, length_inter_tile=7,
@@ -73,10 +70,13 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
     # mynet = models_v1.NPR_net_img_v1(ch_in=10, kernel_size=3, tile_length=4, n_layers=20, length_inter_tile=7,
     #                                  epsilon=0.01, pad_mode=0, no_stit_design=params['no_boundary_for_design']).train().to(device)
 
-
-    mynet = models_v1.NPR_net_stack_v2(params, ch_in=10, kernel_size=3, tile_length=4, n_layers=12,
+    mynet = models_v1.NPR_net_stack_v2(params, ch_in=10, kernel_size=3, tile_length=4, n_layers=16,
                                        length_inter_tile=7, epsilon=0.01, pad_mode=1, unfolded_loss=False,
-                                       norm_in_window=False, W_half=False).train().to(device)
+                                       norm_in_window=False, W_half=True, only_diag=False, is_resnet=False).train().to(
+        device)
+
+    # mynet = models_v1.NPR_net_stack_chain_reg(params, ch_in=10, kernel_size=3, tile_length=4, n_layers=12,
+    # length_inter_tile=3, num_reg=7, epsilon=0.01, pad_mode=0, unfolded_loss=True, norm_in_window=False, W_half=True, is_resnet=False).train().to(device)
 
     """SAVING THE TENSORBOARD"""
     out_tensorboard_folder_name = params["time_saving_folder"] + "/tensorboards"
@@ -84,12 +84,10 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
         os.mkdir(out_tensorboard_folder_name)
     writer = tensorboard.SummaryWriter(out_tensorboard_folder_name)
 
-
     """SET LOSS AND OPTIMIZATION"""
     loss_fn = my_loss.loss_for_stit_v1(params['tile_length'], params["stitching_weights"], params['loss_type'])
 
     optimizer = optim.Adam(mynet.parameters(), lr=params['lr'])
-
 
     """TRAIN NETWORK"""
     epochs = params["epochs"]
@@ -141,7 +139,6 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
                 current_loss.backward()
                 optimizer.step()
 
-
                 # y_pred_np_saving = other_tools.from_torch_tensor_stack_to_full_res_numpy(y_pred)
                 # y_pred_np_saving = y_pred_np_saving[0]
                 # exr.write("./train_out_color.exr", y_pred_np_saving[:, :, 0:3])
@@ -189,7 +186,6 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
 
                     exr.write(inter_patch_folder_name + "/epoch_" + str(epoch) + "_" + str(l) + "_color_ref.exr",
                               y_np_saving[l, :, :, 0:3])
-
 
     """VALIDATE NETWORK"""
     with torch.no_grad():
@@ -251,8 +247,7 @@ def train_test_model_stack_v1(train_input_stack, train_design_stack, train_GT_st
 
         f.close()
     writer.close()
-    a=1
-
+    a = 1
 
 
 def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_GT_img, params):
@@ -270,7 +265,6 @@ def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_
     H_d = int(H // params["tile_length"])
     W_d = int(W // params["tile_length"])
 
-
     """NORMALIZATION FOR STACK BUFFER"""
     norm.normalize_input_img_v1(train_input_img)
     norm.normalize_input_img_v1(test_input_img)
@@ -278,13 +272,11 @@ def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_
     norm.normalize_GT_v1(train_GT_img)
     norm.normalize_GT_v1(test_GT_img)
 
-
     """MAKING THE DESIGN MATRIX"""
     train_design_stack = design.generate_design_mat_from_img_v1(train_input_img[:, :, :, 3:],
-                                                       params['tile_length'], params['grid_order'], False)
+                                                                params['tile_length'], params['grid_order'], False)
     test_design_stack = design.generate_design_mat_from_img_v1(test_input_img[:, :, :, 3:],
-                                                      params['tile_length'], params['grid_order'], False)
-
+                                                               params['tile_length'], params['grid_order'], False)
 
     """SETTING DATA LOAD AND CORRESPONDING TRANSFORMS"""
     # define transform op
@@ -297,14 +289,13 @@ def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_
 
     # train data loader
     train_data = dataset.Supervised_dataset_with_design_v1(train_input_img, train_design_stack, train_GT_img,
-                                               train=True, transform=transform_patch)
+                                                           train=True, transform=transform_patch)
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=params['batch_size'], shuffle=True)
 
     # test data loader
     test_data = dataset.Supervised_dataset_with_design_v1(test_input_img, test_design_stack, test_GT_img,
-                                                           train=False, transform=transform_img)
+                                                          train=False, transform=transform_img)
     test_loader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
-
 
     """NETWORK INITIALIZATION"""
     mynet = models_v1.NPR_net_img_v1(channels_in=10, kernel_size=3, tile_length=4, n_layers=20, length_inter_tile=5,
@@ -317,11 +308,9 @@ def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_
     writer = tensorboard.SummaryWriter(out_tensorboard_folder_name + "/" + params['saving_file_name'] + "_" +
                                        str(datetime.today().strftime("%Y_%m_%d_%H_%M")))
 
-
     """SET LOSS AND OPTIMIZATION"""
     loss_fn = my_loss.loss_for_stit_v1(params['tile_length'], params["stitching_weights"], params['loss_type'])
     optimizer = optim.Adam(mynet.parameters(), lr=params['lr'])
-
 
     """TRAIN NETWORK"""
     epochs = params["epochs"]
@@ -362,7 +351,6 @@ def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_
                 if not os.path.exists(out_para_folder_name):
                     os.mkdir(out_para_folder_name)
                 torch.save(mynet.state_dict(), out_para_folder_name + "/latest_parameter")
-
 
     """VALIDATE NETWORK"""
     with torch.no_grad():
@@ -425,8 +413,7 @@ def train_test_model_img_v1(train_input_img, train_GT_img, test_input_img, test_
 
         f.close()
     writer.close()
-    a=1
-
+    a = 1
 
 
 def test_model_stack_v1(test_input_stack, test_design_stack, test_GT_stack, params):
@@ -443,16 +430,14 @@ def test_model_stack_v1(test_input_stack, test_design_stack, test_GT_stack, para
     H = H_d * params["tile_length"]
     W = W_d * params["tile_length"]
 
-
     """SETTING DATA LOAD AND CORRESPONDING TRANSFORMS"""
     # define transform op
     transform_img = transforms.Compose([FT.ToTensor_stack_with_design(multi_crop=False)])  # targeting for image
 
     # test data loader
     test_data = dataset.Supervised_dataset_with_design_v1(test_input_stack, test_design_stack, test_GT_stack,
-                                                           train=False, transform=transform_img)
+                                                          train=False, transform=transform_img)
     test_loader = torch.utils.data.DataLoader(test_data, batch_size=1, shuffle=False)
-
 
     """NETWORK INITIALIZATION"""
     mynet = models_v1.NPR_net_stack_v1(ch_in=10, kernel_size=3, tile_length=4, n_layers=12, length_inter_tile=5,
